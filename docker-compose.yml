@@ -5,7 +5,7 @@ services:
     build: .
     container_name: log-generator
     environment:
-      - ATTACK=mixed
+      - ATTACK=all
       - INTERVAL=0.3
     volumes:
       - logs:/app/logs

@@ -6,28 +6,46 @@ all alert rules are created automatically on startup.
 
 ---
 
-## overview
+## what this project does
 
-### stack
+the generator simulates real linux security events and writes them to log files in the exact same format as a real linux server would produce. filebeat picks up these logs, logstash parses and classifies them, and the data flows into two siem systems simultaneously: kibana (elk stack) and graylog.
+
+on top of that there is a correlation engine (correlator.py) that runs separately and finds complex attack patterns that simple rules cannot detect, and a test framework (tester.py) that measures how well the monitoring system performs.
+
+---
+
+## stack
 
 | component | image | purpose | port |
 |---|---|---|---|
-| log-generator | python:3.12-alpine | generates security logs | — |
-| filebeat | elastic/filebeat:8.13.0 | collects and ships logs | — |
-| logstash | elastic/logstash:8.13.0 | parses and enriches logs | 5044 |
-| elasticsearch | elastic/elasticsearch:8.13.0 | stores and indexes events | 9200 |
+| log-generator | python:3.12-alpine | generates 15 types of security logs | none |
+| filebeat | elastic/filebeat:8.13.0 | collects log files and ships them | none |
+| logstash | elastic/logstash:8.13.0 | parses and classifies events | 5044 |
+| elasticsearch | elastic/elasticsearch:8.13.0 | stores and indexes all events | 9200 |
 | kibana | elastic/kibana:8.13.0 | dashboards and alerts (siem 1) | 5601 |
-| kibana-setup | curlimages/curl | auto-creates 15 alert rules | — |
-| graylog | graylog/graylog:5.1 | second siem, search and alerts | 9000 |
-| graylog-setup | curlimages/curl | auto-creates 15 alert rules | — |
+| kibana-setup | curlimages/curl | auto-creates 15 rules and dashboards | none |
+| graylog | graylog/graylog:5.1 | second siem with search and alerts | 9000 |
+| graylog-setup | curlimages/curl | auto-creates 15 rules and inputs | none |
 | opensearch | opensearch:2.11.0 | storage backend for graylog | 9201 |
 | mongodb | mongo:6.0 | config storage for graylog | 27017 |
 
-### data flow
+## data flow
 
 ```
-log-generator → logs/ volume → filebeat → logstash → elasticsearch → kibana
-                                                     ↘ graylog (gelf udp)
+log-generator
+     |
+     v
+logs/ volume (auth.log, syslog, kern.log, nginx/access.log)
+     |
+     v
+filebeat (reads files, ships to logstash)
+     |
+     v
+logstash (parses, classifies attack_type and traffic_type)
+     |
+     +----------> elasticsearch --> kibana
+     |
+     +----------> graylog (via gelf udp)
 ```
 
 ---
@@ -36,45 +54,44 @@ log-generator → logs/ volume → filebeat → logstash → elasticsearch → k
 
 ### requirements
 
-- docker desktop (apple silicon / intel / windows)
-- 8 gb ram allocated to docker (settings → resources → memory)
-- free ports: 5601, 9200, 9000, 9201, 5044, 12201
+before starting make sure you have:
 
-### run
+- docker desktop installed (apple silicon, intel, or windows)
+- at least 8 gb ram allocated to docker: docker desktop settings > resources > memory > 8gb
+- free ports: 5601, 9200, 9000, 9201
+
+### run everything
 
 ```bash
-# clone the repository
 git clone <repo-url>
 cd log-generator
-
-# start the full stack
 docker compose up -d --build
 ```
 
-wait 2-3 minutes for all containers to start:
+wait about 2 to 3 minutes for all containers to start. check the status:
 
 ```bash
 docker compose ps
 ```
 
-check generator output:
-
-```bash
-docker compose logs -f log-generator
-```
+all containers should show status "up". then open the web interfaces.
 
 ### web interfaces
 
 | service | url | login | password |
 |---|---|---|---|
-| kibana | http://localhost:5601 | — | — |
-| elasticsearch | http://localhost:9200 | — | — |
+| kibana | http://localhost:5601 | none required | none required |
+| elasticsearch api | http://localhost:9200 | none required | none required |
 | graylog | http://localhost:9000 | admin | admin |
+
+in kibana go to: analytics > dashboards > security monitoring dashboard
+
+in graylog go to: alerts > event definitions to see the 15 rules
 
 ### stop
 
 ```bash
-# stop but keep data
+# stop but keep all data
 docker compose down
 
 # stop and delete all data (full reset)
@@ -85,57 +102,60 @@ docker compose down -v
 
 ## attack scenarios
 
-| # | scenario | log file | description |
+| number | scenario | log file | description |
 |---|---|---|---|
 | 1 | ssh brute force | auth.log | password guessing on ssh port |
-| 2 | port scan | syslog | port scanning like nmap |
+| 2 | port scan | syslog | port scanning similar to nmap |
 | 3 | sql injection | nginx/access.log | malicious queries via url parameters |
-| 4 | ddos / http flood | nginx/access.log | flood requests from a single ip |
-| 5 | syn flood | kern.log | tcp-level kernel attack |
+| 4 | ddos flood | nginx/access.log | flood requests from a single ip |
+| 5 | syn flood | kern.log | tcp level kernel attack |
 | 6 | directory traversal | nginx/access.log | attempts to read system files |
-| 7 | privilege escalation | auth.log | attempts to gain root access |
+| 7 | privilege escalation | auth.log | attempts to get root access |
 | 8 | xss | nginx/access.log | cross-site scripting via url |
-| 9 | log4shell (cve-2021-44228) | nginx/access.log | log4j vulnerability exploitation |
+| 9 | log4shell cve-2021-44228 | nginx/access.log | log4j vulnerability exploitation |
 | 10 | reverse shell | auth.log | attempts to establish reverse connection |
-| 11 | credential stuffing | nginx/access.log | automated login attempts with leaked credentials |
+| 11 | credential stuffing | nginx/access.log | automated login with leaked credentials |
 | 12 | dns amplification | syslog | traffic amplification via dns |
 | 13 | arp spoofing | kern.log | arp cache poisoning |
-| 14 | ransomware activity | syslog | file encryption activity simulation |
+| 14 | ransomware activity | syslog | file encryption simulation |
 | 15 | lateral movement | auth.log | attacker hopping between internal hosts |
+| 16 | kill chain | all files | full 7-stage attack sequence from one ip |
 
-### generator modes
+---
 
-| attack env variable | description |
-|---|---|
-| `ssh_brute` | only ssh brute force |
-| `port_scan` | only port scanning |
-| `sql_injection` | only sql injection |
-| `ddos` | only ddos flood |
-| `syn_flood` | only syn flood |
-| `directory_traversal` | only directory traversal |
-| `privilege_escalation` | only privilege escalation |
-| `xss` | only xss attacks |
-| `log4shell` | only log4shell exploits |
-| `reverse_shell` | only reverse shell attempts |
-| `credential_stuffing` | only credential stuffing |
-| `dns_amplification` | only dns amplification |
-| `arp_spoofing` | only arp spoofing |
-| `ransomware` | only ransomware activity |
-| `lateral_movement` | only lateral movement |
-| `all` | all attacks randomly mixed (default) |
-| `mixed` | 80% normal traffic + 20% attacks |
+## generator modes
 
-### changing the mode
-
-edit `docker-compose.yml`:
+change the mode in docker-compose.yml under the log-generator environment section:
 
 ```yaml
 environment:
-  - ATTACK=mixed    # choose attack mode
-  - INTERVAL=0.3    # seconds between log lines
+  - ATTACK=mixed
+  - INTERVAL=0.3
 ```
 
-restart the generator:
+| attack value | description |
+|---|---|
+| ssh-brute | only ssh brute force |
+| port-scan | only port scanning |
+| sql-injection | only sql injection |
+| ddos | only ddos flood |
+| syn-flood | only syn flood |
+| directory-traversal | only directory traversal |
+| privilege-escalation | only privilege escalation |
+| xss | only xss attacks |
+| log4shell | only log4shell exploits |
+| reverse-shell | only reverse shell attempts |
+| credential-stuffing | only credential stuffing |
+| dns-amplification | only dns amplification |
+| arp-spoofing | only arp spoofing |
+| ransomware | only ransomware activity |
+| lateral-movement | only lateral movement |
+| kill-chain | full attack sequence (7 stages) |
+| all | all attacks randomly mixed (default) |
+| mixed | 80 percent normal traffic and 20 percent attacks |
+| normal-only | only normal traffic (for testing false positives) |
+
+after changing restart the generator:
 
 ```bash
 docker compose restart log-generator
@@ -145,31 +165,121 @@ docker compose restart log-generator
 
 ## alert rules
 
-rules are created **automatically** on every `docker compose up` via kibana-setup and graylog-setup containers.
+rules are created automatically every time you run docker compose up via kibana-setup and graylog-setup containers. you do not need to do anything manually.
 
-### kibana — stack management → rules
+### kibana rules
+
+go to: stack management > rules
 
 | rule | threshold | window |
 |---|---|---|
-| ssh brute force detected | > 5 events | 1 minute |
-| ddos attack detected | > 50 events | 1 minute |
-| sql injection detected | > 3 events | 1 minute |
-| syn flood detected | > 3 events | 1 minute |
-| successful ssh break-in detected | > 1 event | 5 minutes |
-| xss attack detected | > 3 events | 1 minute |
-| log4shell exploit detected | > 1 event | 5 minutes |
-| reverse shell attempt detected | > 1 event | 5 minutes |
-| credential stuffing detected | > 5 events | 1 minute |
-| dns amplification detected | > 3 events | 1 minute |
-| arp spoofing detected | > 2 events | 1 minute |
-| ransomware activity detected | > 1 event | 5 minutes |
-| lateral movement detected | > 2 events | 5 minutes |
-| directory traversal detected | > 3 events | 1 minute |
-| privilege escalation detected | > 2 events | 1 minute |
+| ssh brute force detected | more than 5 events | 1 minute |
+| ddos attack detected | more than 50 events | 1 minute |
+| sql injection detected | more than 3 events | 1 minute |
+| syn flood detected | more than 3 events | 1 minute |
+| successful ssh break-in detected | more than 1 event | 5 minutes |
+| xss attack detected | more than 3 events | 1 minute |
+| log4shell exploit detected | more than 1 event | 5 minutes |
+| reverse shell attempt detected | more than 1 event | 5 minutes |
+| credential stuffing detected | more than 5 events | 1 minute |
+| dns amplification detected | more than 3 events | 1 minute |
+| arp spoofing detected | more than 2 events | 1 minute |
+| ransomware activity detected | more than 1 event | 5 minutes |
+| lateral movement detected | more than 2 events | 5 minutes |
+| directory traversal detected | more than 3 events | 1 minute |
+| privilege escalation detected | more than 2 events | 1 minute |
 
-### graylog — alerts → event definitions
+### graylog rules
+
+go to: alerts > event definitions
 
 the same 15 rules are created automatically via graylog api.
+
+---
+
+## correlation engine
+
+the correlator finds complex multi-stage attack patterns that simple rules miss.
+
+### how to run
+
+make sure docker compose is running, then in a separate terminal:
+
+```bash
+source .venv/bin/activate
+python3 correlator.py
+```
+
+it checks elasticsearch every 60 seconds and prints alerts to the terminal.
+
+### correlation rules
+
+| rule | what it detects |
+|---|---|
+| kill chain pattern | port scan and brute force and escalation in same window |
+| multi-surface attack | simultaneous attacks on web and system logs |
+| brute force success | brute force attempts followed by successful login |
+| ransomware activity | ransomware events with lateral movement |
+| apt indicators | log4shell plus reverse shell combination |
+
+---
+
+## test framework
+
+tester.py measures how well the monitoring system detects attacks.
+
+### how to run
+
+```bash
+source .venv/bin/activate
+python3 tester.py
+```
+
+the test runs all 10 scenarios one by one. each scenario takes about 2.5 minutes so the full run takes around 25 to 30 minutes. you can run it in the background:
+
+```bash
+python3 tester.py > test_report.txt 2>&1 &
+cat test_report.txt
+```
+
+### what it measures
+
+- detection rate: how many attack types were detected out of total
+- false positive rate: how many alerts fire on normal traffic per minute
+- false negative rate: how many attacks were not detected
+- latency: how long it takes from attack start to alert
+
+---
+
+## threat intelligence
+
+the generator uses real malicious ip addresses from public threat intelligence feeds. on first run it downloads the feeds and caches them locally. on subsequent runs it loads from cache (valid for 1 hour).
+
+sources used:
+
+- ipsum: github.com/stamparm/ipsum (updated daily)
+- firehol: github.com/firehol/blocklist-ipsets
+- blocklist.de: lists.blocklist.de
+
+total pool size: approximately 120000 unique malicious ip addresses.
+
+---
+
+## running the generator manually without docker
+
+```bash
+cd log-generator
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 generator.py
+```
+
+or with environment variables to skip the menu:
+
+```bash
+ATTACK=ssh_brute INTERVAL=0.5 python3 generator.py
+```
 
 ---
 
@@ -177,39 +287,25 @@ the same 15 rules are created automatically via graylog api.
 
 ```
 log-generator/
-├── generator.py          # main generator script (15 attacks + normal traffic)
-├── Dockerfile            # container image for generator
-├── docker-compose.yml    # full infrastructure definition
-├── requirements.txt      # python dependencies
-├── .dockerignore
-├── .gitignore
-├── README.md
-├── filebeat/
-│   └── filebeat.yml      # log collection config
-├── kibana/
-│   └── setup.sh          # auto-creates 15 rules in kibana via api
-├── graylog/
-│   └── setup.sh          # auto-creates 15 rules in graylog via api
-└── logstash/
-    ├── Dockerfile        # logstash image with gelf plugin
-    └── pipeline.conf     # log parsing and classification rules
-```
-
----
-
-## running the generator manually (without docker)
-
-```bash
-cd log-generator
-python3 -m venv .venv
-source .venv/bin/activate   # on windows: .venv\Scripts\activate
-python3 generator.py
-```
-
-or via environment variables (no menu):
-
-```bash
-ATTACK=ssh_brute INTERVAL=0.5 python3 generator.py
+  generator.py          main generator script with 16 attack modes
+  threat_intel.py       threat intelligence ip feed loader
+  correlator.py         correlation engine with 5 rules
+  tester.py             test framework with metrics
+  Dockerfile            container image for generator
+  docker-compose.yml    full stack configuration
+  requirements.txt      python dependencies
+  .dockerignore
+  .gitignore
+  README.md
+  filebeat/
+    filebeat.yml        log collection configuration
+  kibana/
+    setup.sh            auto-creates 15 rules and 4 dashboards
+  graylog/
+    setup.sh            auto-creates 15 rules and gelf input
+  logstash/
+    Dockerfile          logstash image with gelf output plugin
+    pipeline.conf       log parsing and classification rules
 ```
 
 ---
@@ -232,7 +328,7 @@ docker compose logs -f kibana-setup
 # graylog rule creation logs
 docker compose logs -f graylog-setup
 
-# count events in elasticsearch
+# count total events in elasticsearch
 curl localhost:9200/security-logs-*/_count
 
 # list all elasticsearch indices
@@ -240,14 +336,21 @@ curl localhost:9200/_cat/indices?v
 
 # rebuild and restart everything
 docker compose down && docker compose up -d --build
+
+# run kill chain attack
+docker compose stop log-generator
+# edit docker-compose.yml: ATTACK=kill_chain
+docker compose up -d log-generator
 ```
 
 ---
 
 ## notes
 
-- logs are generated in real linux format (`/var/log/auth.log`, `syslog`, `kern.log`, `nginx/access.log`)
-- logstash classifies every event with `attack_type` and `traffic_type` fields
-- data flows to both kibana and graylog simultaneously via dual logstash output (elasticsearch + gelf udp)
-- `docker compose down -v` deletes all data — rules are recreated on next startup
+- logs are generated in real linux format matching /var/log/auth.log, syslog, kern.log and nginx/access.log
+- logstash classifies every event with attack-type and traffic-type fields
+- data flows to both kibana and graylog simultaneously via dual logstash output
+- elk images are native arm64 and run without rosetta on apple silicon m1 through m4
 - graylog uses opensearch as its storage backend to avoid port conflicts with elasticsearch
+- running docker compose down -v deletes all data and rules are recreated on next startup
+- all containers except log-generator use timezone utc so timestamps may differ from local time by 3 hours in moscow timezone

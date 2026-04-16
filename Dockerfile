@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # copy all project code into the container
 COPY generator.py .
+COPY threat_intel.py .
 
 # default environment variables
 # can be overridden in docker-compose.yml
