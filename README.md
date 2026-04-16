@@ -344,6 +344,32 @@ docker compose up -d log-generator
 ```
 
 ---
+## running tests
+
+the test suite checks that every attack function writes correctly formatted log lines.
+
+### how to run
+
+```bash
+source .venv/bin/activate
+pip install pytest
+python3 -m pytest tests.py -v
+```
+
+### what is tested
+
+- every attack function writes to the correct log file
+- every system log line matches the linux syslog format
+- every nginx log line matches the combined log format
+- ssh brute force contains password events
+- sql injection contains known payloads
+- ddos lines contain status code 429
+- log4shell lines contain jndi or obfuscated jndi payloads
+- normal traffic returns success status codes 200 301 304
+- random ip generator returns valid external ip addresses
+- all log files exist after generation
+
+total: 51 tests
 
 ## notes
 
