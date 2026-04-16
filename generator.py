@@ -24,41 +24,78 @@ def write(filepath, line):
 
 
 def ssh_brute_force():
-    """ssh brute force (password guessing)"""
+    """
+    ssh brute force (password guessing with realistic burst pattern)
+    real attacks come in bursts from one ip with increasing frequency,
+    not as a uniform stream. this function simulates one full burst episode.
+    """
     users = ["root", "admin", "ubuntu", "user", "test", "pi"]
-    user  = random.choice(users)
-    ip    = random_ip()
+    ip    = random_ip()   # one attacker ip for the whole burst
     port  = random.choice([22, 2222])
-    pid   = random.randint(10000, 99999)
     host  = "ubuntu-server"
 
-    if random.random() < 0.02:
-        line = (f"{ts()} {host} sshd[{pid}]: "
-                f"Accepted password for {user} from {ip} port {port} ssh2")
-    elif random.random() < 0.85:
-        line = (f"{ts()} {host} sshd[{pid}]: "
-                f"Failed password for invalid user {user} from {ip} port {port} ssh2")
-    else:
-        line = (f"{ts()} {host} sshd[{pid}]: "
-                f"Connection closed by invalid user {user} {ip} port {port} [preauth]")
+    # burst size: 20 to 50 attempts from same ip
+    burst_size = random.randint(20, 50)
 
-    write("logs/system/auth.log", line)
+    # starting interval between attempts (slow at first, then faster)
+    base_delay = random.uniform(0.3, 0.8)
 
+    for i in range(burst_size):
+        pid  = random.randint(10000, 99999)
+        user = random.choice(users)
+
+        # last attempt in burst: small chance of success
+        if i == burst_size - 1 and random.random() < 0.05:
+            line = (f"{ts()} {host} sshd[{pid}]: "
+                    f"Accepted password for {user} from {ip} port {port} ssh2")
+        elif random.random() < 0.7:
+            line = (f"{ts()} {host} sshd[{pid}]: "
+                    f"Failed password for invalid user {user} from {ip} port {port} ssh2")
+        else:
+            line = (f"{ts()} {host} sshd[{pid}]: "
+                    f"Connection closed by invalid user {user} {ip} port {port} [preauth]")
+
+        write("logs/system/auth.log", line)
+
+        # attacks accelerate over time: delay shrinks with each attempt
+        # simulates attacker ramping up speed as no block is detected
+        delay = max(0.05, base_delay * (0.92 ** i))
+        time.sleep(delay)
+
+    # brief silence after burst before next one
+    silence = random.uniform(2.0, 8.0)
+    time.sleep(silence)
 
 def port_scan():
-    """port scan (scanning ports like nmap)"""
-    ip   = random_ip()
-    port = random.randint(1, 65535)
+    """
+    port scan (scanning ports like nmap with burst pattern)
+    real port scans hit many ports rapidly from one ip,
+    then stop — not one port per interval
+    """
+    ip   = random_ip()   # one scanner ip for the whole sweep
     host = "ubuntu-server"
     pid  = random.randint(1000, 9999)
 
-    variants = [
-        f"{ts()} {host} kernel: [UFW BLOCK] IN=eth0 OUT= SRC={ip} DST=192.168.1.1 PROTO=TCP DPT={port}",
-        f"{ts()} {host} sshd[{pid}]: refused connect from {ip}",
-        f"{ts()} {host} kernel: TCP: request_sock_TCP: Possible SYN flooding on port {port}. Sending cookies.",
-    ]
-    write("logs/system/syslog", random.choice(variants))
+    # scan burst: 10 to 30 ports in rapid succession
+    burst_size = random.randint(10, 30)
 
+    # pick random ports to scan (no repeats)
+    ports = random.sample(range(1, 65535), burst_size)
+
+    for port in ports:
+        variants = [
+            f"{ts()} {host} kernel: [UFW BLOCK] IN=eth0 OUT= SRC={ip} DST=192.168.1.1 PROTO=TCP DPT={port}",
+            f"{ts()} {host} sshd[{pid}]: refused connect from {ip}",
+            f"{ts()} {host} kernel: TCP: request_sock_TCP: Possible SYN flooding on port {port}. Sending cookies.",
+        ]
+        write("logs/system/syslog", random.choice(variants))
+
+        # port scans are fast: 0.05 to 0.2 seconds between ports
+        time.sleep(random.uniform(0.05, 0.2))
+
+    # silence after scan
+    silence = random.uniform(3.0, 10.0)
+    time.sleep(silence)
 
 def sql_injection():
     """sql injection (attempts via url)"""
@@ -83,14 +120,13 @@ def sql_injection():
 
 
 def ddos():
-    """ddos (flood requests from one ip)"""
+    """ddos (single flood request from one ip, burst handled by loop)"""
     ip   = random_ip()
     size = random.randint(50, 200)
 
-    for _ in range(random.randint(20, 50)):
-        line = (f'{ip} - - [{datetime.now().strftime("%d/%b/%Y:%H:%M:%S +0000")}] '
-                f'"GET / HTTP/1.1" 429 {size}')
-        write("logs/nginx/access.log", line)
+    line = (f'{ip} - - [{datetime.now().strftime("%d/%b/%Y:%H:%M:%S +0000")}] '
+            f'"GET / HTTP/1.1" 429 {size}')
+    write("logs/nginx/access.log", line)
 
 
 def syn_flood():
@@ -488,13 +524,15 @@ def menu():
 
 
 def _loop(fn, interval, mode):
-    """main generation loop — runs until ctrl+c"""
+    """main generation loop  runs until ctrl+c"""
+
     attack_fns = [
         ssh_brute_force, port_scan, sql_injection,
         ddos, syn_flood, directory_traversal, privilege_escalation,
         xss, log4shell, reverse_shell, credential_stuffing,
         dns_amplification, arp_spoofing, ransomware_activity, lateral_movement
     ]
+
     normal_fns = [normal_traffic, normal_ssh, normal_system]
 
     try:
@@ -522,11 +560,10 @@ def _loop(fn, interval, mode):
             time.sleep(interval)
 
     except KeyboardInterrupt:
-        print("\n\n  ⏹ stopped. logs saved to ./logs/")
-
+        print("\n\n  stopped. logs saved to ./logs/")
 
 def run_interactive():
-    """interactive mode — shows menu, asks for interval"""
+    """interactive mode shows menu, asks for interval"""
     choice = menu()
 
     interval = input("  interval between lines (sec, e.g. 0.5): ").strip()
@@ -537,23 +574,23 @@ def run_interactive():
 
     name, fn = ATTACKS[choice]
 
-    print(f"\n  ▶ attack:    {name}")
-    print(f"  ▶ interval:  {interval} sec")
-    print(f"  ▶ logs:      ./logs/")
-    print(f"  ▶ stop:      ctrl+c\n")
+    print(f"\n  attack:    {name}")
+    print(f"  interval:  {interval} sec")
+    print(f"  logs:      ./logs/")
+    print(f"  stop:      ctrl+c\n")
 
-    _loop(fn, interval, mode=choice)
+    _loop(fn, interval, choice)   # pass choice as mode
 
 
 def run_env():
-    """docker mode — reads ATTACK and INTERVAL from environment"""
+    """docker mode reads ATTACK and INTERVAL from environment"""
     attack   = os.environ.get("ATTACK", "all").strip()
     interval = os.environ.get("INTERVAL", "0.5").strip()
 
     key = ENV_ATTACKS.get(attack)
     if key is None:
         print(f"  [warn] unknown attack '{attack}', falling back to 'all'")
-        key = "17"  # исправленный fallback
+        key = "17"
 
     try:
         interval = float(interval)
@@ -562,13 +599,13 @@ def run_env():
 
     name, fn = ATTACKS[key]
 
-    print(f"  ▶ mode:      docker / env")
-    print(f"  ▶ attack:    {name}")
-    print(f"  ▶ interval:  {interval} sec")
-    print(f"  ▶ logs:      ./logs/")
-    print(f"  ▶ stop:      ctrl+c\n")
+    print(f"  mode:      docker / env")
+    print(f"  attack:    {name}")
+    print(f"  interval:  {interval} sec")
+    print(f"  logs:      ./logs/")
+    print(f"  stop:      ctrl+c\n")
 
-    _loop(fn, interval, mode=key)
+    _loop(fn, interval, key)   # pass key as mode
 
 
 if __name__ == "__main__":
