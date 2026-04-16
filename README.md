@@ -1,7 +1,7 @@
 # security log generator
 
 a tool for simulating linux security events and testing monitoring systems.
-generates realistic log files based on 15 attack scenarios and sends them to two siem systems — kibana and graylog.
+generates realistic log files based on 15 attack scenarios and sends them to two siem systems: kibana and graylog.
 all alert rules are created automatically on startup.
 
 ---
