@@ -1,0 +1,25 @@
+filebeat.inputs:
+
+  # read system logs: auth.log, kern.log, syslog
+  - type: log
+    enabled: true
+    paths:
+      - /logs/system/auth.log
+      - /logs/system/kern.log
+      - /logs/system/syslog
+    fields:
+      log_type: system
+    fields_under_root: true
+
+  # read nginx access log
+  - type: log
+    enabled: true
+    paths:
+      - /logs/nginx/access.log
+    fields:
+      log_type: nginx
+    fields_under_root: true
+
+# send to logstash (for kibana)
+output.logstash:
+  hosts: ["logstash:5044"]

@@ -1,0 +1,137 @@
+services:
+
+  # log generator
+  log-generator:
+    build: .
+    container_name: log-generator
+    environment:
+      - ATTACK=mixed
+      - INTERVAL=0.3
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      - filebeat
+
+  # filebeat reads logs and sends to logstash
+  filebeat:
+    image: elastic/filebeat:8.13.0
+    container_name: filebeat
+    user: root
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - logs:/logs:ro
+    depends_on:
+      - logstash
+
+  # logstash parses and enriches logs
+  # logstash parses and enriches logs
+  logstash:
+    build:
+      context: ./logstash
+      dockerfile: Dockerfile
+    container_name: logstash
+    volumes:
+      - ./logstash/pipeline.conf:/usr/share/logstash/pipeline/pipeline.conf:ro
+    depends_on:
+      - elasticsearch
+      - graylog
+
+  # elasticsearch stores and indexes all events for kibana
+  elasticsearch:
+    image: elastic/elasticsearch:8.13.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.authc.api_key.enabled=true
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+
+  # kibana provides dashboards and alerts ui
+  kibana:
+    image: elastic/kibana:8.13.0
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=supersecretkey12345678901234567890
+      - XPACK_SECURITY_ENCRYPTIONKEY=supersecretkey12345678901234567890
+      - XPACK_REPORTING_ENCRYPTIONKEY=supersecretkey12345678901234567890
+      - XPACK_FLEET_ENABLED=false
+      - XPACK_SECURITYSOLUTION_ENABLED=true
+    depends_on:
+      - elasticsearch
+
+  # kibana setup creates alert rules automatically on startup
+  kibana-setup:
+    image: curlimages/curl:latest
+    container_name: kibana-setup
+    volumes:
+      - ./kibana/setup.sh:/setup.sh
+    entrypoint: ["sh", "/setup.sh"]
+    depends_on:
+      - kibana
+    restart: "no"
+
+  # mongodb — config storage for graylog
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb
+    volumes:
+      - mongodata:/data/db
+
+  # opensearch — log storage for graylog
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: opensearch
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    volumes:
+      - opensearchdata:/usr/share/opensearch/data
+
+  # graylog — second siem for log analysis
+  graylog:
+    image: graylog/graylog:5.1
+    container_name: graylog
+    environment:
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper1234567890abcd
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://localhost:9000/
+      - GRAYLOG_ELASTICSEARCH_HOSTS=http://opensearch:9200
+      - GRAYLOG_MONGODB_URI=mongodb://mongodb/graylog
+    ports:
+      - "9000:9000"
+      - "5045:5045/tcp"   # beats input for graylog
+      - "12201:12201/udp" # gelf udp input
+      - "5555:5555/udp"   # syslog udp input
+    depends_on:
+      - mongodb
+      - opensearch
+    volumes:
+      - graylogdata:/usr/share/graylog/data
+
+  # graylog setup creates inputs and alerts automatically
+  graylog-setup:
+    image: curlimages/curl:latest
+    container_name: graylog-setup
+    volumes:
+      - ./graylog/setup.sh:/setup.sh
+    entrypoint: ["sh", "/setup.sh"]
+    depends_on:
+      - graylog
+    restart: "no"
+
+# shared volumes
+volumes:
+  logs:
+  esdata:
+  mongodata:
+  opensearchdata:
+  graylogdata:
